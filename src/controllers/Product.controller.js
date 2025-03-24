@@ -139,50 +139,56 @@ const createProduct=asyncHandler (async(req,res)=>{
 
 })
 
-const fetchProducts=asyncHandler(async(req,res)=>{
-  let query=Product.find({})
-  let totalProductsQuery=Product.find({})
 
+const fetchProducts = asyncHandler(async (req, res) => {
+  let query = Product.find({});  // Don't use await here
+  let totalProductsQuery = Product.find({});  // Don't use await here
+
+  // Apply filters based on query parameters
   if (req.query.category) {
-    query=query.find({category:req.query.category});
-    totalProductsQuery=totalProductsQuery.find({category:req.query.category});
-
+    query = query.where({ category: req.query.category });
+    totalProductsQuery = totalProductsQuery.where({ category: req.query.category });
   }
 
   if (req.query.brand) {
-    query=query.find({brand:req.query.brand})
-    totalProductsQuery=totalProductsQuery.find({brand:req.query.brand})
-    
+    query = query.where({ brand: req.query.brand });
+    totalProductsQuery = totalProductsQuery.where({ brand: req.query.brand });
   }
 
+  // Apply sorting if sort and order are specified
   if (req.query._sort && req.query._order) {
-    query=query.sort({[req.query._sort]:req.query._order});
+    const sortField = req.query._sort;
+    const sortOrder = req.query._order === 'asc' ? 1 : -1;
+    query = query.sort({ [sortField]: sortOrder });
   }
 
-  const totalDocs=await totalProductsQuery.countDocuments().exec();
-  console.log({totalDocs})
+  // Count total documents matching the query
+  const totalDocs = await totalProductsQuery.countDocuments().exec();
+  console.log({ totalDocs });
 
-  if(req.query._page && req.query._limit){
-    const pageSize=req.query._limit;
-    const page=req.query._page;
-    query=query.skip(pageSize*(page-1)).limit(pageSize)
+  // Apply pagination if _page and _limit are specified
+  if (req.query._page && req.query._limit) {
+    const pageSize = parseInt(req.query._limit);
+    const page = parseInt(req.query._page);
+    query = query.skip(pageSize * (page - 1)).limit(pageSize);
   }
 
-
-  const docs=await query.exec();
-  if(!docs){
-    throw new ApiError(404,"Could not found product")
-  }
-
-  res.set('X-Total-Count',totalDocs);
-
+  // Execute the final query and fetch the documents
+  const docs = await query.exec();
   
+  if (!docs) {
+    throw new ApiError(404, "Could not find products");
+  }
+
+  // Set the total count in the response headers
+  res.set('X-Total-Count', totalDocs);
+
+  // Send the response with the fetched products
   return res.status(201).json(
-    new ApiResponse(200,docs,"Product fetched categorically")
-)
-  
+    new ApiResponse(200, docs, "Products fetched successfully")
+  );
+});
 
-})
 
 const fetchProductById=(async(req,res)=>{
   const {id}=req.params
@@ -201,186 +207,115 @@ const fetchProductById=(async(req,res)=>{
   )
 })
 
-const updateProduct=(async(req,res)=>{
-  const {id}=req.params
-  const {title,description,price,discountPercentage,rating,stock,brand,category,thumbnail,images}=req.body
-  if (
-    (title && typeof title !== 'string') ||
-    (description && typeof description !== 'string') ||
-    (category && typeof category !== 'string') ||
-    (price && typeof price !== 'number') ||
-    (discountPercentage && typeof discountPercentage !== 'number') ||
-    (rating && typeof rating !== 'number') ||
-    (stock && typeof stock !== 'number') ||
-    (brand && typeof brand !== 'string') ||
-    (thumbnail && typeof thumbnail !== 'string') ||
-    (images && (!Array.isArray(images) || images.some(img => typeof img !== 'string')))
-  ) {
-    throw new ApiError(400, "Invalid data format");
-  }
-  const updateFields={}
-  if (title) updateFields.title = title;
-if (description) updateFields.description = description;
-if (price) updateFields.price = price;
-if (discountPercentage) updateFields.discountPercentage = discountPercentage;
-if (rating) updateFields.rating = rating;
-if (stock) updateFields.stock = stock;
-if (brand) updateFields.brand = brand;
-if (category) updateFields.category = category;
-// if (thumbnail) updateFields.thumbnail = thumbnail;
-// if (images) updateFields.images = images;
-  // const thumbnailUrlPath=req.file?.thumbnail[0]?.path
-  // const imageUrlPath=req.file?.images?.map(file=>file.path)
-  if (!updateFields) {
-    throw new ApiError(400,"No update data provided")
-  }
+const updateProduct=asyncHandler(async(req,res)=>{
+    const { id } = req.params;
+    const {
+      title,
+      description,
+      price,
+      discountPercentage,
+      rating,
+      stock,
+      brand,
+      category,
+      thumbnail, // URL or File
+      images // Array of URLs or Files
+    } = req.body;
 
-  let thumbnailUrl=""
-  let imageUrls=[]
-  if (thumbnail) {
-    if (typeof thumbnail === 'string' && !thumbnail.startsWith('http')) {
-      // If thumbnail is a URL
-      thumbnailUrl = thumbnail;
-    } else if (req.files?.thumbnail) {
-      // If thumbnail is uploaded as a file
-      const thumbnailPath = req.files.thumbnail[0]?.path;
-      if (thumbnailPath) {
-        try {
-          const thumbnailUpload = await uploadOnCloudinary(thumbnailPath);
-          if (thumbnailUpload && thumbnailUpload.url) {
-            thumbnailUrl = thumbnailUpload.url;
-            // Remove old thumbnail if exists
-            const oldThumbnail = await Product.findById(id).select('thumbnail');
-            if (oldThumbnail?.thumbnail) {
-              await removeImageFromCloudinary(oldThumbnail.thumbnail);
-            }
-          } else {
-            return res.status(400).json({ error: "Error while uploading thumbnail" });
+    const updateFields = {};
+
+    // Validate and assign basic fields
+    if (title) updateFields.title = title;
+    if (description) updateFields.description = description;
+    if (price) updateFields.price = price;
+    if (discountPercentage) updateFields.discountPercentage = discountPercentage;
+    if (rating) updateFields.rating = rating;
+    if (stock) updateFields.stock = stock;
+    if (brand) updateFields.brand = brand;
+    if (category) updateFields.category = category;
+
+    console.log('Initial updateFields:', updateFields);
+    
+    // Handle thumbnail (URL or File)
+    if (thumbnail || req.files?.thumbnail) {
+      if (thumbnail && typeof thumbnail === 'string' && thumbnail.startsWith('http')) {
+        // If thumbnail is a URL
+        updateFields.thumbnail = thumbnail;
+      } else if (req.files?.thumbnail) {
+        // If thumbnail is uploaded as a file
+        const thumbnailPath = req.files.thumbnail[0].path;
+        const thumbnailUpload = await uploadOnCloudinary(thumbnailPath);
+        if (thumbnailUpload?.url) {
+          updateFields.thumbnail = thumbnailUpload.url;
+
+          const oldThumbnail = await Product.findById(id).select('thumbnail');
+          if (oldThumbnail?.thumbnail && oldThumbnail.thumbnail.includes('cloudinary')) {
+            await removeImageFromcloudinary(oldThumbnail.thumbnail);
           }
-        } catch (error) {
-          return res.status(500).json({ error: "Failed to upload thumbnail" });
+        } else {
+        throw new ApiError(400,"Error while uploading thumbnail");
         }
       } else {
-        return res.status(400).json({ error: "Thumbnail file is missing" });
+        throw new ApiError(400,"Invalid thumbnail data");
       }
-    } else {
-      return res.status(400).json({ error: "Invalid thumbnail data" });
     }
-    updateFields.thumbnail = thumbnailUrl;
-  }
 
-  // Handle images URLs or file uploads
-  if (images) {
-    if (Array.isArray(images)) {
-      if (images.every(img => typeof img === 'string' && !img.startsWith('http'))) {
+    console.log('After thumbnail handling, updateFields:', updateFields);
+
+    // Handle images (Array of URLs or Files)
+    if (images || req.files?.images) {
+      if (Array.isArray(images) && images.every(img => typeof img === 'string' && img.startsWith('http'))) {
         // If images are URLs
-        imageUrls = images;
+        updateFields.images = images;
       } else if (req.files?.images) {
         // If images are uploaded as files
         const imageLocalPaths = req.files.images.map(file => file.path);
-        if (imageLocalPaths.length > 0) {
-          try {
-            const uploadedImages = await Promise.all(imageLocalPaths.map(async (path) => {
-              const uploadResult = await uploadOnCloudinary(path);
-              return uploadResult && uploadResult.url ? uploadResult.url : null;
-            }));
-            if (uploadedImages.every(url => url)) {
-              imageUrls = uploadedImages;
-              // Remove old images if exists
-              const oldImages = await Product.findById(id).select('images');
-              if (Array.isArray(oldImages?.images) && oldImages.images.length > 0) {
-                await Promise.all(oldImages.images.map(async (imageUrl) => {
-                  const urlArray = imageUrl.split('/');
-                  const imageName = urlArray[urlArray.length - 1].split('.')[0];
-                  await new Promise((resolve, reject) => {
-                    cloudinary.uploader.destroy(imageName, (error, result) => {
-                      if (error) {
-                        console.error('Error removing image from Cloudinary:', error);
-                        return reject(error);
-                      }
-                      resolve(result);
-                    });
-                  });
-                }));
+        const uploadedImages = await Promise.all(imageLocalPaths.map(async (path) => {
+          const uploadResult = await uploadOnCloudinary(path);
+          return uploadResult?.url || null;
+        }));
+
+        if (uploadedImages.every(url => url)) {
+          updateFields.images = uploadedImages;
+
+          const oldImages = await Product.findById(id).select('images');
+          if (Array.isArray(oldImages?.images) && oldImages.images.length > 0) {
+            await Promise.all(oldImages.images.map(async (imageUrl) => {
+              if (imageUrl.includes('cloudinary')) {
+                const imageName = imageUrl.split('/').pop().split('.')[0];
+                await cloudinary.uploader.destroy(imageName);
               }
-            } else {
-              return res.status(400).json({ error: "Error while uploading images" });
-            }
-          } catch (error) {
-            return res.status(500).json({ error: "Failed to upload images" });
+            }));
           }
         } else {
-          return res.status(400).json({ error: "No images to upload" });
+          throw new ApiError(400,"Error while uploading images" );
         }
       } else {
-        return res.status(400).json({ error: "Invalid image data" });
+        throw new ApiError(400,"Invalid image data");
       }
-      updateFields.images = imageUrls;
     }
-  }
-//   if (thumbnail || images) {
-//   if (thumbnail && typeof thumbnail==='string') {
-//     thumbnailUrl=thumbnail;
-//   }
-//   if (images>0 && typeof images[0]==='string') {
-//     imageUrls=images;
-//   }
-//   if(req.files?.thumbnail){
-//     const thumbnailPath=req.files?.thumbnail[0]?.path;
-//     if (!thumbnailPath) {
-//       throw new ApiError(200,"Thumbnail is missing")
-//     }
-//     const thumbnailnew=await uploadOnCloudinary(thumbnailPath)
-//     if (!thumbnailnew.url) {
-//       throw new ApiError(400,"Error while uploading thumbnail")
-//     }
-//     thumbnailUrl=thumbnailnew.url
-//   }
-//   if(thumbnailUrl){
-//   const oldThumbnail=await Product.findById(id).select('thumbnail')
-//   if (oldThumbnail.thumbnail) {
-//     await removeImageFromcloudinary(oldThumbnail.thumbnail)
-//   }
-//   updateFields.thumbnail = thumbnailUrl;
-//   }
 
-//   if (req.files.images.every(file=>file.path)) {
-//     const imageLocalPath=req.files?.images?.map(file=>file.path);
-//     if (!imageLocalPath.length) {
-//       throw new ApiError(400,"Images is missing")
-//     }
-//     const images=await Promise.all(imageLocalPath.map(path=>uploadOnCloudinary(path)))
-//     if (!images.every(image=>image.url)) {
-//       throw new ApiError(400,"Error while uploading images")
-//     }
-//     imageUrls=images.map(image=>image.url)
-//   }
-//   if (Array.isArray(imageUrls) && imageUrls.length>0) {
-//     const oldImages=await Product.findById(id).select('images')
-//     if(Array.isArray(oldImages.images) && oldImages.images.length>0){
-//       await Promise.all(oldImages.images.map(imageurl=>removeImageFromcloudinary(imageurl)))
-//     }
-//     updateFields.images = imageUrls;
-//   }
+    console.log('After images handling, updateFields:', updateFields);
 
-// }
+    if (Object.keys(updateFields).length === 0) {
+      throw new ApiError(400,"No update data provided");
+    }
 
-const updatedProduct=await Product.findByIdAndUpdate(
-  id,
-  {$set:updateFields},
-  {new:true,runValidators:true}
-)
-console.log(updatedProduct)
+    const updatedProduct = await Product.findByIdAndUpdate(
+      id,
+      { $set: updateFields },
+      { new: true, runValidators: true }
+    );
 
-if (!updatedProduct) {
-  throw new ApiError(500,"Something went wrong")
-}
+    if (!updatedProduct) {
+      throw new ApiError(500,"Something went wrong");
+    }
 
-return res.status(201).json(
-  new ApiResponse(200,updatedProduct,"Product Updated Successfully")
-)
-
+    return res.status(201).json(
+     new ApiResponse(200,updateProduct,"Product Updated Successfully")
+    );
 })
+
 
 
 
